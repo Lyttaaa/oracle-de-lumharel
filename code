@@ -40,6 +40,8 @@ async def bourse(ctx):
 # Gérer les réactions pour les offrandes et les prières
 @bot.event
 async def on_raw_reaction_add(payload):
+    print(f"{payload.member} a réagi avec {payload.emoji} sur le message {payload.message_id}")
+
     if payload.member.bot:
         return
 
