@@ -3,5 +3,5 @@
     "builder": "NIXPACKS",
     "buildCommand": "pip install -r code/requirements.txt"
   },
-  "start": "python3 code/main.py"
+  "start": "python3 code/code"
 }
