@@ -20,10 +20,10 @@ database = db.utilisateurs
 # Liste des IDs des messages d'autels
 AUTEL_MESSAGE_IDS = [
     1353249202523865153,  # Orrak
-    1353252479873060965,  # Vaek
-    1353252650883354625,  # Nhyara
-    1353252827786379278,  # Zeroth
-    1353252988130430976   # Aëldis
+    1353255384948801637,  # Vaek
+    1353255533544734751,  # Nhyara
+    1353255680462819450,  # Zeroth
+    1353257057679052910   # Aëldis
 ]
 
 # Commande !bourse
