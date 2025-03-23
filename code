@@ -1,8 +1,9 @@
 import discord
 from discord.ext import commands
-import json
 import asyncio
 from datetime import datetime, timedelta
+from pymongo import MongoClient
+import os
 
 # Configuration du bot
 intents = discord.Intents.default()
@@ -10,39 +11,24 @@ intents.members = True
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Chemin de la base de données
-database_path = "oracle_lumharel.json"
+# Connexion à MongoDB
+mongo_uri = "mongodb+srv://lumharelbot:02536917@lumes.vpmi0.mongodb.net/?retryWrites=true&w=majority&appName=Lumes"
+client = MongoClient(mongo_uri)
+db = client.lumharel_bot
+database = db.utilisateurs
 
-# Fonction pour charger la base de données
-def load_data():
-    with open(database_path, "r") as f:
-        return json.load(f)
-
-# Fonction pour sauvegarder la base de données
-def save_data(data):
-    with open(database_path, "w") as f:
-        json.dump(data, f, indent=4)
-
-# Commande !bourse pour afficher les Lumes
-def get_or_create_user(data, user):
-    user_id = str(user.id)
-    if user_id not in data["membres"]:
-        data["membres"][user_id] = {
-            "pseudo": user.name,
-            "lumes": 0,
-            "derniere_offrande": {},
-            "roles_temporaires": {}
-        }
-    return data["membres"][user_id]
-
+# Commande !bourse
 @bot.command()
 async def bourse(ctx):
-    data = load_data()
-    user_data = get_or_create_user(data, ctx.author)
-    save_data(data)
+    user_id = str(ctx.author.id)
+    user_data = database.find_one({"_id": user_id})
+    if not user_data:
+        database.insert_one({"_id": user_id, "pseudo": ctx.author.name, "lumes": 0, "derniere_offrande": {}, "roles_temporaires": {}})
+        user_data = database.find_one({"_id": user_id})
+
     await ctx.send(f"💰 {ctx.author.mention}, tu possèdes actuellement **{user_data['lumes']} Lumes**.")
 
-# Gérer une offrande ou une prière
+# Gérer les réactions pour les offrandes et les prières
 @bot.event
 async def on_raw_reaction_add(payload):
     if payload.member.bot:
@@ -55,16 +41,14 @@ async def on_raw_reaction_add(payload):
     user = payload.member
     user_id = str(user.id)
 
-    # Emojis d'offrande par divinité
     offrandes = {
         "Orrak": ["🍃", "🌰", "🌳", "🌿"],
         "Vaek": ["🔥", "🔨", "🔧", "🧱"],
         "Nhyara": ["💨", "🎐", "🌬️", "💫"],
-        "Zeroth": ["🕯️", "🕸️", "🖤", "⚰️"],
+        "Zeroth": ["⚰️", "🕸️", "🖤", "🪦"],
         "Aëldis": ["❄️", "🧊", "🌙", "☁️"]
     }
 
-    # Emojis de prière (différents des offrandes)
     prieres = {
         "🌿": "Béni·e par la Terre",
         "🔥": "Marqué·e par la Flamme",
@@ -73,20 +57,23 @@ async def on_raw_reaction_add(payload):
         "❄️": "Porté·e par le Silence"
     }
 
-    data = load_data()
-    user_data = get_or_create_user(data, user)
-
     now = datetime.utcnow()
     today = now.strftime("%Y-%m-%d")
 
+    user_data = database.find_one({"_id": user_id})
+    if not user_data:
+        database.insert_one({"_id": user_id, "pseudo": user.name, "lumes": 0, "derniere_offrande": {}, "roles_temporaires": {}})
+        user_data = database.find_one({"_id": user_id})
+
     for divinite, emojis in offrandes.items():
         if emoji in emojis:
-            last = user_data["derniere_offrande"].get(divinite, "")
-            if last == today:
-                return  # Déjà offert aujourd'hui
-            user_data["lumes"] += 3
-            user_data["derniere_offrande"][divinite] = today
-            save_data(data)
+            derniere = user_data.get("derniere_offrande", {}).get(divinite, "")
+            if derniere == today:
+                return  # Offrande déjà faite aujourd'hui
+            database.update_one({"_id": user_id}, {
+                "$set": {f"derniere_offrande.{divinite}": today},
+                "$inc": {"lumes": 3}
+            })
             temp_msg = await channel.send(f"🎁 Une offrande a été faite à **{divinite}**. Les esprits murmurent leur gratitude à {user.mention}. (+3 Lumes)")
             await asyncio.sleep(30)
             await temp_msg.delete()
@@ -98,25 +85,28 @@ async def on_raw_reaction_add(payload):
         if not role:
             role = await user.guild.create_role(name=role_name)
         await user.add_roles(role)
-        user_data["roles_temporaires"][role_name] = now.isoformat()
-        save_data(data)
+
+        database.update_one({"_id": user_id}, {"$set": {f"roles_temporaires.{role_name}": now.isoformat()}})
+
         temp_msg = await channel.send(f"✨ {user.mention} a reçu la bénédiction : **{role_name}**.")
         await asyncio.sleep(30)
         await temp_msg.delete()
 
-# Nettoyage automatique des rôles temporaires
+# Nettoyage des rôles temporaires
 @bot.event
 async def on_ready():
     async def check_roles():
         await bot.wait_until_ready()
         while not bot.is_closed():
-            data = load_data()
             now = datetime.utcnow()
             for guild in bot.guilds:
                 for member in guild.members:
+                    if member.bot:
+                        continue
                     user_id = str(member.id)
-                    if user_id in data["membres"]:
-                        roles_temp = data["membres"][user_id].get("roles_temporaires", {})
+                    user_data = database.find_one({"_id": user_id})
+                    if user_data:
+                        roles_temp = user_data.get("roles_temporaires", {})
                         to_remove = []
                         for role_name, timestamp in roles_temp.items():
                             assigned_time = datetime.fromisoformat(timestamp)
@@ -126,11 +116,10 @@ async def on_ready():
                                     await member.remove_roles(role)
                                     to_remove.append(role_name)
                         for r in to_remove:
-                            del data["membres"][user_id]["roles_temporaires"][r]
-            save_data(data)
+                            database.update_one({"_id": user_id}, {"$unset": {f"roles_temporaires.{r}": ""}})
             await asyncio.sleep(3600)
 
     bot.loop.create_task(check_roles())
 
 # Lancement du bot
-bot.run("TON_TOKEN_ICI")
+bot.run(DISCORD_TOKEN)
