@@ -1,1 +1,1 @@
-start: python3 code.py
+start: python3 code
