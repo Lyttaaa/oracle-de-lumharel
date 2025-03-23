@@ -122,4 +122,4 @@ async def on_ready():
     bot.loop.create_task(check_roles())
 
 # Lancement du bot
-bot.run("DISCORD_TOKEN")
+bot.run(os.getenv("DISCORD_TOKEN"))
