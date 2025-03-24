@@ -14,7 +14,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # Connexion à MongoDB
-mongo_uri = "mongodb+srv://lumharelbot:02536917@lumes.vpmi0.mongodb.net/?retryWrites=true&w=majority&appName=Lumes"
+mongo_uri = os.getenv("MONGO_URI")
 client = MongoClient(mongo_uri)
 db = client.lumharel_bot
 database = db.utilisateurs
