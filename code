@@ -1,195 +1,105 @@
+import os
 import discord
 from discord.ext import commands
-import asyncio
-from datetime import datetime, timedelta
+from discord.errors import Forbidden
 from pymongo import MongoClient
-import os
+from datetime import datetime
 
-# Configuration du bot
+# --- CONFIG ---
+TOKEN = os.getenv("DISCORD_TOKEN")
+MONGO_URL = os.getenv("MONGO_URL")
+GUILD_ID = int(os.getenv("GUILD_ID"))
+
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
 intents.reactions = True
-intents.guilds = True
+
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Connexion à MongoDB
-mongo_uri = os.getenv("MONGO_URI")
-client = MongoClient(mongo_uri)
-db = client.lumharel_bot
-database = db.utilisateurs
+# --- DATABASE ---
+mongo_client = MongoClient(MONGO_URL)
+db = mongo_client["oracle"]
+users_collection = db["users"]
 
-# Associer chaque message_id d'autel à sa divinité
-AUTELS = {
-    1353249202523865153: "Orrak",
-    1353255384948801637: "Vaek",
-    1353255533544734751: "Nhyara",
-    1353255680462819450: "Zeroth",
-    1353257057679052910: "Aëldis"
+# --- CONFIG DES PRIÈRES ET OFFRANDES ---
+PRIERES = {
+    "🌿": "Béni·e par la Terre",
+    "🔥": "Marqué·e par la Flamme",
+    "🌪️": "Guidé·e par les Vents",
+    "🌑": "Voilé·e par les Ombres",
+    "❄️": "Porté·e par le Silence"
 }
 
-# Gérer les réactions pour les offrandes et les prières
+OFFRANDES = {
+    "🌿": "Orrak",
+    "🔥": "Vaek",
+    "🌪️": "Nhyara",
+    "🌑": "Zeroth",
+    "❄️": "Façonneur oublié"
+}
+
+# --- EVENTS ---
+@bot.event
+async def on_ready():
+    print(f"✨ {bot.user} est en ligne !")
+
 @bot.event
 async def on_raw_reaction_add(payload):
-    if payload.member.bot:
+    if payload.guild_id != GUILD_ID:
         return
 
     guild = bot.get_guild(payload.guild_id)
-    channel = guild.get_channel(payload.channel_id)
-    user = payload.member
-    user_id = str(user.id)
+    member = guild.get_member(payload.user_id)
+    if member is None or member.bot:
+        return
+
     emoji = str(payload.emoji)
+    today = datetime.utcnow().strftime("%Y-%m-%d")
 
-    # 1. Gestion des prières
-    if emoji in prieres:
-        role_name = prieres[emoji]
+    # --- PRIÈRES ---
+    if emoji in PRIERES:
+        role_name = PRIERES[emoji]
         role = discord.utils.get(guild.roles, name=role_name)
-
         if role:
-            await user.add_roles(role)
-            temp_msg = await channel.send(f"✨ {user.mention} est maintenant **{role_name}**.")
-            await asyncio.sleep(10)
-            await temp_msg.delete()
-        return
+            try:
+                await member.add_roles(role, reason="Prière à un Façonneur")
+                await member.send(f"✨ Ta prière a été entendue. Tu es désormais **{role_name}** pour aujourd’hui.")
+            except Forbidden:
+                print(f"❌ Impossible de donner le rôle {role_name} à {member.display_name}")
 
-    # 2. Gestion des offrandes
-    if payload.message_id not in AUTELS:
-        return
+    # --- OFFRANDES ---
+    if emoji in OFFRANDES:
+        divinite = OFFRANDES[emoji]
 
-    divinite = AUTELS[payload.message_id]
-    if emoji not in OFFRANDES[divinite]:
-        return
+        user_data = users_collection.find_one({"_id": member.id})
+        if not user_data:
+            user_data = {"_id": member.id, "lumes": 0, "last_offrandes": {}}
 
-    today = datetime.date.today().isoformat()
-    user_data = database.find_one({"_id": user_id}) or {}
+        last_offrande = user_data.get("last_offrandes", {})
+        if last_offrande.get(divinite) == today:
+            try:
+                await member.send(f"⚠️ Tu as déjà fait une offrande à **{divinite}** aujourd’hui.")
+            except Forbidden:
+                pass
+            return
 
-    derniere = user_data.get("derniere_offrande", {}).get(divinite, "")
-    if derniere == today:
-        # Message éphémère si déjà offert
-        await user.send(f"⚠️ Tu as déjà fait une offrande à **{divinite}** aujourd’hui.")
-        return
+        # Ajout des Lumes
+        user_data["lumes"] += 5
+        user_data["last_offrandes"][divinite] = today
+        users_collection.update_one({"_id": member.id}, {"$set": user_data}, upsert=True)
 
-    # Enregistrement de l’offrande
-    database.update_one(
-        {"_id": user_id},
-        {"$set": {f"derniere_offrande.{divinite}": today}, "$inc": {"lumes": 3}},
-        upsert=True
-    )
-
-    temp_msg = await channel.send(
-        f"🏱 Une offrande a été faite à **{divinite}**. "
-        f"Les esprits murmurent leur gratitude à {user.mention}. (+3 Lumes)"
-    )
-    await asyncio.sleep(30)
-    await temp_msg.delete()
-
-    # Associer les offrandes possibles par divinité
-OFFRANDES = {
-    "Orrak": ["🍃", "🌰", "🍄", "🍂"],
-    "Vaek": ["🧨", "🔨", "🔧", "🧱"],
-    "Nhyara": ["💨", "🎐", "🌬️", "💫"],
-    "Zeroth": ["⚰️", "🕸️", "🖤", "🗝️"],
-    "Aëldis": ["☃️", "🧊", "🌙", "☁️"]
-}
-
-    prieres = {
-        "🌿": "Béni·e par la Terre",
-        "🔥": "Marqué·e par la Flamme",
-        "🌪️": "Guidé·e par les Vents",
-        "🌑": "Voilé·e par les Ombres",
-        "❄️": "Porté·e par le Silence"
-    }
-
-    now = datetime.utcnow()
-    today = now.strftime("%Y-%m-%d")
-
-    user_data = database.find_one({"_id": user_id})
-    if not user_data:
-        database.insert_one({"_id": user_id, "pseudo": user.name, "lumes": 0, "derniere_offrande": {}, "roles_temporaires": {}})
-        user_data = database.find_one({"_id": user_id})
-
-    for divinite, emojis in offrandes.items():
-        if emoji in emojis:
-            derniere = user_data.get("derniere_offrande", {}).get(divinite, "")
-            if derniere == today:
-                try:
-                    # Essayer d'envoyer un MP
-                    await user.send(
-                        f"⚠️ Tu as déjà fait ton offrande à **{divinite}** aujourd’hui. "
-                        "Reviens demain 🌙"
-                    )
-                except Forbidden:
-                    # Sinon, message temporaire dans le canal
-                    temp_msg = await channel.send(
-                        f"⚠️ {user.mention}, tu as déjà fait ton offrande à **{divinite}** aujourd’hui."
-                    )
-                    await asyncio.sleep(10)
-                    try:
-                        await temp_msg.delete()
-                    except:
-                        pass
-                return
-
-           # Si ce n'est pas déjà fait aujourd'hui → on enregistre et récompense
-        database.update_one(
-            {"_id": user_id},
-            {
-                "$set": {f"derniere_offrande.{divinite}": today},
-                "$inc": {"lumes": 3}
-            }
-        )
-        temp_msg = await channel.send(
-            f"🏱 Une offrande a été faite à **{divinite}**. "
-            f"Les esprits murmurent leur gratitude à {user.mention}. (+3 Lumes)"
-        )
-        await asyncio.sleep(30)
         try:
-            await temp_msg.delete()
-        except:
+            await member.send(f"🌟 Ton offrande a été acceptée par **{divinite}**. Tu gagnes **5 Lumes** !")
+        except Forbidden:
             pass
-        return
 
-    if emoji in prieres:
-        role_name = prieres[emoji]
-        role = discord.utils.get(user.guild.roles, name=role_name)
-        if not role:
-            role = await user.guild.create_role(name=role_name)
-        await user.add_roles(role)
+# --- COMMANDES ---
+@bot.command()
+async def lumes(ctx):
+    user_data = users_collection.find_one({"_id": ctx.author.id})
+    lumes = user_data.get("lumes", 0) if user_data else 0
+    await ctx.send(f"💰 {ctx.author.mention}, tu possèdes actuellement **{lumes} Lumes**.")
 
-        database.update_one({"_id": user_id}, {"$set": {f"roles_temporaires.{role_name}": now.isoformat()}})
-
-        temp_msg = await channel.send(f"✨ {user.mention} a reçu la bénédiction : **{role_name}**.")
-        await asyncio.sleep(30)
-        await temp_msg.delete()
-
-# Nettoyage des rôles temporaires
-@bot.event
-async def on_ready():
-    async def check_roles():
-        await bot.wait_until_ready()
-        while not bot.is_closed():
-            now = datetime.utcnow()
-            for guild in bot.guilds:
-                for member in guild.members:
-                    if member.bot:
-                        continue
-                    user_id = str(member.id)
-                    user_data = database.find_one({"_id": user_id})
-                    if user_data:
-                        roles_temp = user_data.get("roles_temporaires", {})
-                        to_remove = []
-                        for role_name, timestamp in roles_temp.items():
-                            assigned_time = datetime.fromisoformat(timestamp)
-                            if now - assigned_time > timedelta(hours=24):
-                                role = discord.utils.get(guild.roles, name=role_name)
-                                if role in member.roles:
-                                    await member.remove_roles(role)
-                                    to_remove.append(role_name)
-                        for r in to_remove:
-                            database.update_one({"_id": user_id}, {"$unset": {f"roles_temporaires.{r}": ""}})
-            await asyncio.sleep(3600)
-
-    bot.loop.create_task(check_roles())
-
-# Lancement du bot
-bot.run(os.getenv("DISCORD_TOKEN"))
+# --- START ---
+bot.run(TOKEN)
