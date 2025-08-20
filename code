@@ -158,7 +158,8 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
             "lumes": 0,
             "derniere_benediction": "",
             "roles_temporaires": {},   # { role_name: iso_timestamp }
-            "offrandes": {}           # { "Orrak": "YYYY-MM-DD", ... }
+            "offrandes": {},           # { "Orrak": "YYYY-MM-DD", ... }
+            "dernier_autel": ""        # nom de la divinité de la dernière bénédiction
         })
         user = utilisateurs.find_one({"_id": user_id}) or {}
 
@@ -168,11 +169,20 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     if emoji == deity["priere_emoji"]:
         last_bless = user.get("derniere_benediction", "")
         if last_bless == today:
-            # déjà béni·e aujourd'hui
+            # déjà béni·e aujourd'hui → MP avec rôle + autel
+            roles_temp = user.get("roles_temporaires", {}) or {}
+            role_name = next(iter(roles_temp.keys()), None)  # ex: "Béni·e par la Terre"
+            autel_precis = user.get("dernier_autel") or deity_name
+
+            if role_name:
+                msg = f"✨ Tu as déjà reçu une bénédiction aujourd’hui : **{role_name}** (Autel de {autel_precis})."
+            else:
+                msg = f"✨ Tu as déjà reçu une bénédiction aujourd’hui (Autel de {autel_precis})."
+
             try:
-                await member.send("⚠️ Tu as déjà reçu une bénédiction aujourd’hui. Reviens demain 🌙")
+                await member.send(msg)
             except Forbidden:
-                await send_temp(channel, f"⚠️ {member.mention}, tu as déjà reçu une bénédiction aujourd’hui.", 10)
+                await send_temp(channel, msg, 10)
             return
 
         role_name = deity["role"]
@@ -195,11 +205,12 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
             {"$set": {
                 "derniere_benediction": today,
                 f"roles_temporaires.{role_name}": datetime.utcnow().isoformat(),
-                "pseudo": member.name
+                "pseudo": member.name,
+                "dernier_autel": deity_name  # <-- on enregistre le nom de l'autel
             }},
             upsert=True
         )
-        await send_temp(channel, f"✨ {member.mention} reçoit la bénédiction **{role_name}**.", 30)
+        await send_temp(channel, f"✨ {member.mention} reçoit la bénédiction **{role_name}** (Autel de {deity_name}).", 30)
         return
 
     # ----- OFFRANDE (Lumes: 1/jour par divinité) -----
@@ -279,10 +290,13 @@ async def benediction(ctx: commands.Context):
     today = today_str()
 
     if user.get("derniere_benediction") == today:
-        # essaie de retrouver le rôle courant à partir des rôles temporaires
         roles_temp = user.get("roles_temporaires", {}) or {}
         role_name = next(iter(roles_temp.keys()), "Bénédiction active")
-        await ctx.send(f"✨ {ctx.author.mention}, ta bénédiction du jour est **{role_name}**.")
+        autel_precis = user.get("dernier_autel", None)
+        if autel_precis and role_name != "Bénédiction active":
+            await ctx.send(f"✨ {ctx.author.mention}, ta bénédiction du jour est **{role_name}** (Autel de {autel_precis}).")
+        else:
+            await ctx.send(f"✨ {ctx.author.mention}, ta bénédiction du jour est **{role_name}**.")
     else:
         await ctx.send(f"🌙 {ctx.author.mention}, tu n’as pas encore reçu de bénédiction aujourd’hui.")
 
