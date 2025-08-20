@@ -71,33 +71,43 @@ async def on_raw_reaction_add(payload):
     for divinite, emojis in offrandes.items():
         if emoji in emojis:
             derniere = user_data.get("derniere_offrande", {}).get(divinite, "")
-if derniere == today:
-    try:
-        # Essayer d'envoyer un MP
-        await user.send(
-            f"⚠️ Tu as déjà fait ton offrande à **{divinite}** aujourd’hui. "
-            "Reviens demain 🌙"
+            if derniere == today:
+                try:
+                    # Essayer d'envoyer un MP
+                    await user.send(
+                        f"⚠️ Tu as déjà fait ton offrande à **{divinite}** aujourd’hui. "
+                        "Reviens demain 🌙"
+                    )
+                except Forbidden:
+                    # Sinon, message temporaire dans le canal
+                    temp_msg = await channel.send(
+                        f"⚠️ {user.mention}, tu as déjà fait ton offrande à **{divinite}** aujourd’hui."
+                   )
+                   await asyncio.sleep(10)
+                   try:
+                       await temp_msg.delete()
+                   except:
+                       pass
+               return
+
+           # Si ce n'est pas déjà fait aujourd'hui → on enregistre et récompense
+        database.update_one(
+            {"_id": user_id},
+            {
+                "$set": {f"derniere_offrande.{divinite}": today},
+                "$inc": {"lumes": 3}
+            }
         )
-    except Forbidden:
-        # Sinon, message temporaire dans le canal
         temp_msg = await channel.send(
-            f"⚠️ {user.mention}, tu as déjà fait ton offrande à **{divinite}** aujourd’hui."
+            f"🏱 Une offrande a été faite à **{divinite}**. "
+            f"Les esprits murmurent leur gratitude à {user.mention}. (+3 Lumes)"
         )
-        await asyncio.sleep(10)
+        await asyncio.sleep(30)
         try:
             await temp_msg.delete()
         except:
             pass
-    return
-
-            database.update_one({"_id": user_id}, {
-                "$set": {f"derniere_offrande.{divinite}": today},
-                "$inc": {"lumes": 3}
-            })
-            temp_msg = await channel.send(f"🏱 Une offrande a été faite à **{divinite}**. Les esprits murmurent leur gratitude à {user.mention}. (+3 Lumes)")
-            await asyncio.sleep(30)
-            await temp_msg.delete()
-            return
+        return
 
     if emoji in prieres:
         role_name = prieres[emoji]
