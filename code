@@ -19,38 +19,78 @@ client = MongoClient(mongo_uri)
 db = client.lumharel_bot
 database = db.utilisateurs
 
-# Liste des IDs des messages d'autels
-AUTEL_MESSAGE_IDS = [
-    1353249202523865153,  # Orrak
-    1353255384948801637,  # Vaek
-    1353255533544734751,  # Nhyara
-    1353255680462819450,  # Zeroth
-    1353257057679052910   # Aëldis
-]
+# Associer chaque message_id d'autel à sa divinité
+AUTELS = {
+    1353249202523865153: "Orrak",
+    1353255384948801637: "Vaek",
+    1353255533544734751: "Nhyara",
+    1353255680462819450: "Zeroth",
+    1353257057679052910: "Aëldis"
+}
 
 # Gérer les réactions pour les offrandes et les prières
 @bot.event
 async def on_raw_reaction_add(payload):
-    if payload.member is None or payload.member.bot:
+    if payload.member.bot:
         return
 
-    if payload.message_id not in AUTEL_MESSAGE_IDS:
-        return  # Ne traite que les messages des autels
-
-    channel = bot.get_channel(payload.channel_id)
-    message = await channel.fetch_message(payload.message_id)
-
-    emoji = str(payload.emoji)
+    guild = bot.get_guild(payload.guild_id)
+    channel = guild.get_channel(payload.channel_id)
     user = payload.member
     user_id = str(user.id)
+    emoji = str(payload.emoji)
 
-    offrandes = {
-        "Orrak": ["🍃", "🌰", "🍄", "🍂"],
-        "Vaek": ["🧨", "🔨", "🔧", "🧱"],
-        "Nhyara": ["💨", "🎐", "🌬️", "💫"],
-        "Zeroth": ["⚰️", "🕸️", "🖤", "🗝️"],
-        "Aëldis": ["☃️", "🧊", "🌙", "☁️"]
-    }
+    # 1. Gestion des prières
+    if emoji in prieres:
+        role_name = prieres[emoji]
+        role = discord.utils.get(guild.roles, name=role_name)
+
+        if role:
+            await user.add_roles(role)
+            temp_msg = await channel.send(f"✨ {user.mention} est maintenant **{role_name}**.")
+            await asyncio.sleep(10)
+            await temp_msg.delete()
+        return
+
+    # 2. Gestion des offrandes
+    if payload.message_id not in AUTELS:
+        return
+
+    divinite = AUTELS[payload.message_id]
+    if emoji not in OFFRANDES[divinite]:
+        return
+
+    today = datetime.date.today().isoformat()
+    user_data = database.find_one({"_id": user_id}) or {}
+
+    derniere = user_data.get("derniere_offrande", {}).get(divinite, "")
+    if derniere == today:
+        # Message éphémère si déjà offert
+        await user.send(f"⚠️ Tu as déjà fait une offrande à **{divinite}** aujourd’hui.")
+        return
+
+    # Enregistrement de l’offrande
+    database.update_one(
+        {"_id": user_id},
+        {"$set": {f"derniere_offrande.{divinite}": today}, "$inc": {"lumes": 3}},
+        upsert=True
+    )
+
+    temp_msg = await channel.send(
+        f"🏱 Une offrande a été faite à **{divinite}**. "
+        f"Les esprits murmurent leur gratitude à {user.mention}. (+3 Lumes)"
+    )
+    await asyncio.sleep(30)
+    await temp_msg.delete()
+
+    # Associer les offrandes possibles par divinité
+OFFRANDES = {
+    "Orrak": ["🍃", "🌰", "🍄", "🍂"],
+    "Vaek": ["🧨", "🔨", "🔧", "🧱"],
+    "Nhyara": ["💨", "🎐", "🌬️", "💫"],
+    "Zeroth": ["⚰️", "🕸️", "🖤", "🗝️"],
+    "Aëldis": ["☃️", "🧊", "🌙", "☁️"]
+}
 
     prieres = {
         "🌿": "Béni·e par la Terre",
