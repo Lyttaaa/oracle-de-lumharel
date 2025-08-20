@@ -175,7 +175,7 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
             autel_precis = user.get("dernier_autel") or deity_name
 
             if role_name:
-                msg = f"✨ Tu as déjà reçu une bénédiction aujourd’hui : **{role_name}** (Autel de {autel_precis})."
+                msg = f"✨ Tu as déjà reçu une bénédiction aujourd’hui : **{role_name}**."
             else:
                 msg = f"✨ Tu as déjà reçu une bénédiction aujourd’hui (Autel de {autel_precis})."
 
