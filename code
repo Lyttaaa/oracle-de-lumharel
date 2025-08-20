@@ -270,22 +270,16 @@ async def cleanup_roles():
         print("⚠️ cleanup_roles error:", e)
 
 # ======================
-#   COMMANDES
+#   COMMANDE BÉNÉDICTION
 # ======================
-@bot.command(name="oracle_lumes")
-async def oracle_lumes(ctx: commands.Context):
-    user_id = str(ctx.author.id)
-    user = utilisateurs.find_one({"_id": user_id}) or {}
-    lumes = user.get("lumes", 0)
-    await ctx.send(f"💰 {ctx.author.mention}, tu possèdes **{lumes} Lumes**.")
-
 @bot.command(name="benediction")
 async def benediction(ctx: commands.Context):
     user_id = str(ctx.author.id)
     user = utilisateurs.find_one({"_id": user_id}) or {}
     today = today_str()
+
     if user.get("derniere_benediction") == today:
-        # essaie d’inférer le rôle courant à partir des rôles_temporaires
+        # essaie de retrouver le rôle courant à partir des rôles temporaires
         roles_temp = user.get("roles_temporaires", {}) or {}
         role_name = next(iter(roles_temp.keys()), "Bénédiction active")
         await ctx.send(f"✨ {ctx.author.mention}, ta bénédiction du jour est **{role_name}**.")
