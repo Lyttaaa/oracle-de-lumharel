@@ -25,6 +25,13 @@ db = cluster["lumharel"]
 utilisateurs = db["utilisateurs"]
 
 # -------- PARAMÈTRES DES AUTELS --------
+AUTELS = {
+    1353249202523865153: "Orrak",
+    1353255384948801637: "Vaek",
+    1353255533544734751: "Nhyara",
+    1353255680462819450: "Zeroth",
+    1353257057679052910: "Aëldis",
+}
 PRIERES = {
     "🌿": "Béni·e par la Terre",
     "🔥": "Marqué·e par la Flamme",
