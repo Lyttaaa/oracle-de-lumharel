@@ -82,13 +82,13 @@ async def on_raw_reaction_add(payload):
                     # Sinon, message temporaire dans le canal
                     temp_msg = await channel.send(
                         f"⚠️ {user.mention}, tu as déjà fait ton offrande à **{divinite}** aujourd’hui."
-                   )
-                   await asyncio.sleep(10)
-                   try:
-                       await temp_msg.delete()
-                   except:
-                       pass
-               return
+                    )
+                    await asyncio.sleep(10)
+                    try:
+                        await temp_msg.delete()
+                    except:
+                        pass
+                return
 
            # Si ce n'est pas déjà fait aujourd'hui → on enregistre et récompense
         database.update_one(
