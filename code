@@ -26,12 +26,13 @@ utilisateurs = db["utilisateurs"]
 
 # -------- PARAMÈTRES DES AUTELS --------
 AUTELS = {
-    1353249202523865153: "Orrak",
-    1353255384948801637: "Vaek",
-    1353255533544734751: "Nhyara",
-    1353255680462819450: "Zeroth",
-    1353257057679052910: "Aëldis",
+    "🌿": {"role": "Béni·e par la Terre", "message_id": 1353249202523865153},
+    "🔥": {"role": "Marqué·e par la Flamme", "message_id": 1353255384948801637},
+    "🌪️": {"role": "Guidé·e par les Vents", "message_id": 1353255533544734751},
+    "🌑": {"role": "Voilé·e par les Ombres", "message_id": 1353255680462819450},
+    "❄️": {"role": "Porté·e par le Silence", "message_id": 1353257057679052910}
 }
+
 PRIERES = {
     "🌿": "Béni·e par la Terre",
     "🔥": "Marqué·e par la Flamme",
@@ -73,7 +74,11 @@ async def on_raw_reaction_add(payload):
 
     emoji = str(payload.emoji)
     channel = guild.get_channel(payload.channel_id)
-    message = await channel.fetch_message(payload.message_id)
+    message_id = payload.message_id
+
+    # ✅ Vérifie si l'emoji correspond à un autel ET si le message_id est correct
+    if emoji not in AUTELS or AUTELS[emoji]["message_id"] != message_id:
+        return  # Pas un autel → on ignore
 
     today = datetime.utcnow().strftime("%Y-%m-%d")
     user_id = str(payload.user_id)
