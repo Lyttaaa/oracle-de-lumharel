@@ -113,20 +113,6 @@ async def on_raw_reaction_add(payload):
 # --- COMMANDES ---
 
 @bot.command()
-async def lumes(ctx):
-    user_id = str(ctx.author.id)
-    lumes = user_data.get(user_id, {}).get("lumes", 0)
-    await ctx.send(f"💰 {ctx.author.mention}, tu possèdes **{lumes} Lumes**.")
-
-# --- COMMANDES ---
-
-@bot.command()
-async def lumes(ctx):
-    user_id = str(ctx.author.id)
-    lumes = user_data.get(user_id, {}).get("lumes", 0)
-    await ctx.send(f"💰 {ctx.author.mention}, tu possèdes **{lumes} Lumes**.")
-
-@bot.command()
 async def benediction(ctx):
     user_id = str(ctx.author.id)
     today = str(date.today())
