@@ -73,14 +73,23 @@ async def on_raw_reaction_add(payload):
             derniere = user_data.get("derniere_offrande", {}).get(divinite, "")
 if derniere == today:
     try:
-        # Essayer un MP
-        await user.send(f"⚠️ Tu as déjà fait ton offrande à **{divinite}** aujourd’hui. Reviens demain 🌙")
-    except discord.Forbidden:
-        # Sinon message dans le channel, auto-supprimé après 10s
-        temp_msg = await channel.send(f"⚠️ {user.mention}, tu as déjà fait ton offrande à **{divinite}** aujourd’hui.")
+        # Essayer d'envoyer un MP
+        await user.send(
+            f"⚠️ Tu as déjà fait ton offrande à **{divinite}** aujourd’hui. "
+            "Reviens demain 🌙"
+        )
+    except Forbidden:
+        # Sinon, message temporaire dans le canal
+        temp_msg = await channel.send(
+            f"⚠️ {user.mention}, tu as déjà fait ton offrande à **{divinite}** aujourd’hui."
+        )
         await asyncio.sleep(10)
-        await temp_msg.delete()
+        try:
+            await temp_msg.delete()
+        except:
+            pass
     return
+
             database.update_one({"_id": user_id}, {
                 "$set": {f"derniere_offrande.{divinite}": today},
                 "$inc": {"lumes": 3}
