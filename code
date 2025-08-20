@@ -63,10 +63,6 @@ async def send_temp(channel, message, seconds=10):
 # -------- ÉVÉNEMENT : Réaction ajoutée --------
 @bot.event
 async def on_raw_reaction_add(payload):
-@bot.event
-async def on_raw_reaction_add(payload):
-    print(f"📩 Réaction détectée : {payload.emoji} sur message {payload.message_id} par user {payload.user_id}")
-
     if payload.guild_id != GUILD_ID:
         return
     if payload.user_id == bot.user.id:
@@ -79,11 +75,18 @@ async def on_raw_reaction_add(payload):
 
     emoji = str(payload.emoji)
     channel = guild.get_channel(payload.channel_id)
-    message_id = payload.message_id
 
-    # ✅ Vérifie si l'emoji correspond à un autel ET si le message_id est correct
-    if emoji not in AUTELS or AUTELS[emoji]["message_id"] != message_id:
-        return  # Pas un autel → on ignore
+    print(f"📩 Réaction détectée : {emoji} sur message {payload.message_id} par {member.display_name}")
+
+    # Vérifie si c'est bien un autel
+    if emoji not in AUTELS:
+        return
+    autel = AUTELS[emoji]
+
+    # Vérifie que c'est le bon message
+    if payload.message_id != autel["message_id"]:
+        print(f"⚠️ Mauvais message, ignoré (attendu {autel['message_id']})")
+        return
 
     today = datetime.utcnow().strftime("%Y-%m-%d")
     user_id = str(payload.user_id)
@@ -91,40 +94,45 @@ async def on_raw_reaction_add(payload):
 
     # -------- PRIÈRES (rôles temporaires) --------
     if emoji in PRIERES:
-        # 🔒 Limite : 1 bénédiction par jour
         last_bless = (user_data.get("derniere_benediction") or "")
         if last_bless == today:
-            try:
-                await member.send("⚠️ Tu as déjà reçu une bénédiction aujourd’hui. Reviens demain 🌙")
-            except Forbidden:
-                await send_temp(channel, f"⚠️ {member.mention}, tu as déjà reçu une bénédiction aujourd’hui.", seconds=10)
+            await send_temp(channel, f"⚠️ {member.mention}, tu as déjà reçu une bénédiction aujourd’hui.", seconds=10)
             return
 
         role_name = PRIERES[emoji]
         role = discord.utils.get(guild.roles, name=role_name)
         if role is None:
-            try:
-                role = await guild.create_role(name=role_name, reason="Création auto par Oracle (prière)")
-            except Forbidden:
-                print(f"❌ Permission insuffisante pour créer le rôle {role_name}")
-                return
+            role = await guild.create_role(name=role_name, reason="Création auto par Oracle (prière)")
 
-        try:
-            await member.add_roles(role, reason="Bénédiction via prière")
-        except Forbidden:
-            print(f"❌ Impossible d'ajouter le rôle {role_name} à {member.display_name}")
-        else:
-            # Enregistre la date de bénédiction
-            utilisateurs.update_one(
-                {"_id": user_id},
-                {"$set": {
-                    f"roles_temporaires.{role_name}": datetime.utcnow().isoformat(),
-                    "derniere_benediction": today
-                }},
-                upsert=True
-            )
-            if channel:
-                await send_temp(channel, f"✨ {member.mention} a reçu la bénédiction : **{role_name}**.", seconds=30)
+        await member.add_roles(role, reason="Bénédiction via prière")
+        utilisateurs.update_one(
+            {"_id": user_id},
+            {"$set": {
+                f"roles_temporaires.{role_name}": datetime.utcnow().isoformat(),
+                "derniere_benediction": today
+            }},
+            upsert=True
+        )
+        await send_temp(channel, f"✨ {member.mention} a reçu la bénédiction : **{role_name}**.", seconds=30)
+        return
+
+    # -------- OFFRANDES --------
+    if emoji in OFFRANDES:
+        last_offrande = user_data.get("offrandes", {}).get(emoji, {}).get("date", "")
+        if last_offrande == today:
+            await send_temp(channel, f"⚠️ {member.mention}, tu as déjà fait une offrande à cet autel aujourd’hui.", seconds=10)
+            return
+
+        lumes = user_data.get("lumes", 0) + OFFRANDES[emoji]
+        utilisateurs.update_one(
+            {"_id": user_id},
+            {"$set": {
+                f"offrandes.{emoji}.date": today,
+                "lumes": lumes
+            }},
+            upsert=True
+        )
+        await send_temp(channel, f"🌟 {member.mention} a offert un présent et gagne **{OFFRANDES[emoji]} Lumes**. Total : {lumes} Lumes.", seconds=30)
         return
 
     # -------- OFFRANDES --------
