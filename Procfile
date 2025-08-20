@@ -1,1 +1,1 @@
-start: python3 code
+worker: python code
