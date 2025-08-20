@@ -1,70 +1,71 @@
-import os
-import asyncio
-from datetime import datetime, timedelta
 import discord
-from discord.ext import commands, tasks
-from discord.errors import Forbidden
-from pymongo import MongoClient
-
-# -------- CONFIG --------
-TOKEN = os.getenv("DISCORD_TOKEN")
-MONGO_URI = os.getenv("MONGO_URI")
-GUILD_ID = int(os.getenv("GUILD_ID", "0"))
+from discord.ext import commands
+import json
+from datetime import date
 
 intents = discord.Intents.default()
-intents.message_content = True
-intents.guilds = True
 intents.members = True
 intents.reactions = True
-intents.messages = True
-
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# -------- BASE DE DONNÉES --------
-cluster = MongoClient(MONGO_URI)
-db = cluster["lumharel"]
-utilisateurs = db["utilisateurs"]
+# --- CONFIGURATION ---
 
-# -------- PARAMÈTRES DES AUTELS --------
-AUTELS = {
-    "🌿": {"role": "Béni·e par la Terre", "message_id": 1353249202523865153},
-    "🔥": {"role": "Marqué·e par la Flamme", "message_id": 1353255384948801637},
-    "🌪️": {"role": "Guidé·e par les Vents", "message_id": 1353255533544734751},
-    "🌑": {"role": "Voilé·e par les Ombres", "message_id": 1353255680462819450},
-    "❄️": {"role": "Porté·e par le Silence", "message_id": 1353257057679052910}
+# IDs des messages des autels
+AUTEL_MESSAGES = {
+    "Orrak": 1353249202523865153,   # ID du message d’autel Orrak
+    "Vaek": 1353255384948801637,    # ID du message d’autel Vaek
+    "Nhyara": 1353255533544734751,  # ID du message d’autel Nhyara
+    "Zeroth": 1353255680462819450,  # ID du message d’autel Zeroth
+    "Aëldis": 1353257057679052910   # ID du message d’autel Aëldis
 }
 
+# Prières (emoji → rôle donné)
 PRIERES = {
-    "🌿": "Béni·e par la Terre",
-    "🔥": "Marqué·e par la Flamme",
-    "🌪️": "Guidé·e par les Vents",
-    "🌑": "Voilé·e par les Ombres",
-    "❄️": "Porté·e par le Silence"
+    "🌿": "Béni·e par la Terre",   # Orrak
+    "🔥": "Marqué·e par la Flamme",  # Vaek
+    "🌪️": "Guidé·e par les Vents",  # Nhyara
+    "🌑": "Voilé·e par les Ombres",  # Zeroth
+    "❄️": "Porté·e par le Silence"   # Aëldis
 }
 
+# Offrandes (dieu → liste d’emojis acceptés)
 OFFRANDES = {
-    "🌿": 5,
-    "🔥": 5,
-    "🌪️": 5,
-    "🌑": 5,
-    "❄️": 5
+    "Orrak": ["🍃", "🌰", "🍄", "🍂"],
+    "Vaek": ["🧨", "🔨", "🔧", "🧱"],
+    "Nhyara": ["💨", "🎐", "🌬️", "💫"],
+    "Zeroth": ["⚰️", "🕸️", "🖤", "🗝️"],
+    "Aëldis": ["☃️", "🧊", "🌙", "☁️"]
 }
 
-# -------- OUTILS --------
-async def send_temp(channel, message, seconds=10):
-    """Envoie un message temporaire qui s'efface après X secondes"""
-    msg = await channel.send(message)
-    await asyncio.sleep(seconds)
-    try:
-        await msg.delete()
-    except:
-        pass
+# Valeur fixe des Lumes par offrande
+LUMES_PAR_OFFRANDE = 5
 
-# -------- ÉVÉNEMENT : Réaction ajoutée --------
+# Fichier de sauvegarde
+DATA_FILE = "users_data.json"
+
+# --- FONCTIONS SAUVEGARDE ---
+
+def load_data():
+    try:
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+
+def save_data(data):
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4)
+
+user_data = load_data()
+
+# --- EVENTS ---
+
+@bot.event
+async def on_ready():
+    print(f"✨ Connecté en tant que {bot.user}")
+
 @bot.event
 async def on_raw_reaction_add(payload):
-    if payload.guild_id != GUILD_ID:
-        return
     if payload.user_id == bot.user.id:
         return
 
@@ -74,122 +75,67 @@ async def on_raw_reaction_add(payload):
         return
 
     emoji = str(payload.emoji)
-    channel = guild.get_channel(payload.channel_id)
-
-    print(f"📩 Réaction détectée : {emoji} sur message {payload.message_id} par {member.display_name}")
-
-    # Vérifie si c'est bien un autel
-    if emoji not in AUTELS:
-        return
-    autel = AUTELS[emoji]
-
-    # Vérifie que c'est le bon message
-    if payload.message_id != autel["message_id"]:
-        print(f"⚠️ Mauvais message, ignoré (attendu {autel['message_id']})")
-        return
-
-    today = datetime.utcnow().strftime("%Y-%m-%d")
+    today = str(date.today())
     user_id = str(payload.user_id)
-    user_data = utilisateurs.find_one({"_id": user_id}) or {"_id": user_id}
 
-    # -------- PRIÈRES (rôles temporaires) --------
-    if emoji in PRIERES:
-        last_bless = (user_data.get("derniere_benediction") or "")
-        if last_bless == today:
-            await send_temp(channel, f"⚠️ {member.mention}, tu as déjà reçu une bénédiction aujourd’hui.", seconds=10)
+    if user_id not in user_data:
+        user_data[user_id] = {"lumes": 0}
+
+    # --- PRIÈRES ---
+    if emoji in PRIERES and payload.message_id in AUTEL_MESSAGES.values():
+        if user_data[user_id].get("priere_date") == today:
+            await member.send("🌙 Tu as déjà reçu une bénédiction aujourd’hui.")
             return
 
         role_name = PRIERES[emoji]
         role = discord.utils.get(guild.roles, name=role_name)
-        if role is None:
-            role = await guild.create_role(name=role_name, reason="Création auto par Oracle (prière)")
-
-        await member.add_roles(role, reason="Bénédiction via prière")
-        utilisateurs.update_one(
-            {"_id": user_id},
-            {"$set": {
-                f"roles_temporaires.{role_name}": datetime.utcnow().isoformat(),
-                "derniere_benediction": today
-            }},
-            upsert=True
-        )
-        await send_temp(channel, f"✨ {member.mention} a reçu la bénédiction : **{role_name}**.", seconds=30)
+        if role:
+            await member.add_roles(role)
+            user_data[user_id]["priere_date"] = today
+            save_data(user_data)
+            await member.send(f"✨ Tu as reçu la bénédiction **{role_name}** !")
         return
 
-    # -------- OFFRANDES --------
-    if emoji in OFFRANDES:
-        last_offrande = user_data.get("offrandes", {}).get(emoji, {}).get("date", "")
-        if last_offrande == today:
-            await send_temp(channel, f"⚠️ {member.mention}, tu as déjà fait une offrande à cet autel aujourd’hui.", seconds=10)
+    # --- OFFRANDES ---
+    for dieu, emojis in OFFRANDES.items():
+        if emoji in emojis and payload.message_id == AUTEL_MESSAGES[dieu]:
+            if user_data[user_id].get("offrande_date") == today:
+                await member.send("🌙 Tu as déjà fait une offrande aujourd’hui.")
+                return
+
+            user_data[user_id]["lumes"] += LUMES_PAR_OFFRANDE
+            user_data[user_id]["offrande_date"] = today
+            save_data(user_data)
+
+            await member.send(f"💎 Ton offrande a été acceptée par **{dieu}**. Tu reçois **+{LUMES_PAR_OFFRANDE} Lumes** !")
             return
 
-        lumes = user_data.get("lumes", 0) + OFFRANDES[emoji]
-        utilisateurs.update_one(
-            {"_id": user_id},
-            {"$set": {
-                f"offrandes.{emoji}.date": today,
-                "lumes": lumes
-            }},
-            upsert=True
-        )
-        await send_temp(channel, f"🌟 {member.mention} a offert un présent et gagne **{OFFRANDES[emoji]} Lumes**. Total : {lumes} Lumes.", seconds=30)
-        return
+# --- COMMANDES ---
 
-    # -------- OFFRANDES --------
-    if emoji in OFFRANDES:
-        last_offrande = user_data.get("offrandes", {}).get(emoji, {}).get("date", "")
-        if last_offrande == today:
-            await send_temp(channel, f"⚠️ {member.mention}, tu as déjà fait une offrande à cet autel aujourd’hui.", seconds=10)
-            return
+@bot.command()
+async def lumes(ctx):
+    user_id = str(ctx.author.id)
+    lumes = user_data.get(user_id, {}).get("lumes", 0)
+    await ctx.send(f"💰 {ctx.author.mention}, tu possèdes **{lumes} Lumes**.")
 
-        lumes = user_data.get("lumes", 0) + OFFRANDES[emoji]
-        utilisateurs.update_one(
-            {"_id": user_id},
-            {"$set": {
-                f"offrandes.{emoji}.date": today,
-                "lumes": lumes
-            }},
-            upsert=True
-        )
-        await send_temp(channel, f"🌟 {member.mention} a offert un présent et gagne **{OFFRANDES[emoji]} Lumes**. Total : {lumes} Lumes.", seconds=30)
-        return
+# --- COMMANDES ---
 
-# -------- TÂCHE : Nettoyage des bénédictions expirées --------
-@tasks.loop(minutes=30)
-async def nettoyage_roles():
-    guild = bot.get_guild(GUILD_ID)
-    if not guild:
-        return
+@bot.command()
+async def lumes(ctx):
+    user_id = str(ctx.author.id)
+    lumes = user_data.get(user_id, {}).get("lumes", 0)
+    await ctx.send(f"💰 {ctx.author.mention}, tu possèdes **{lumes} Lumes**.")
 
-    now = datetime.utcnow()
-    for user_data in utilisateurs.find():
-        user_id = int(user_data["_id"])
-        member = guild.get_member(user_id)
-        if not member:
-            continue
+@bot.command()
+async def benediction(ctx):
+    user_id = str(ctx.author.id)
+    today = str(date.today())
 
-        roles_temp = user_data.get("roles_temporaires", {})
-        for role_name, timestamp in list(roles_temp.items()):
-            try:
-                role = discord.utils.get(guild.roles, name=role_name)
-                if not role:
-                    continue
+    # Vérifie si l’utilisateur a prié aujourd’hui
+    if user_data.get(user_id, {}).get("priere_date") == today:
+        role_name = user_data[user_id].get("priere_role", "Inconnue")
+        await ctx.send(f"✨ {ctx.author.mention}, ta bénédiction du jour est **{role_name}**.")
+    else:
+        await ctx.send(f"🌙 {ctx.author.mention}, tu n’as pas encore prié aujourd’hui.")
 
-                dt = datetime.fromisoformat(timestamp)
-                if now - dt > timedelta(hours=24):
-                    await member.remove_roles(role, reason="Fin de bénédiction (24h)")
-                    utilisateurs.update_one(
-                        {"_id": str(user_id)},
-                        {"$unset": {f"roles_temporaires.{role_name}": ""}}
-                    )
-            except Exception as e:
-                print(f"Erreur nettoyage rôle {role_name} pour {member.display_name} : {e}")
-
-# -------- EVENTS --------
-@bot.event
-async def on_ready():
-    print(f"✅ Connecté en tant que {bot.user}")
-    nettoyage_roles.start()
-
-# -------- LANCEMENT --------
-bot.run(TOKEN)
+bot.run("TON_TOKEN_ICI")
