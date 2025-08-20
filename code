@@ -16,6 +16,7 @@ intents.message_content = True
 intents.guilds = True
 intents.members = True
 intents.reactions = True
+intents.messages = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
@@ -62,6 +63,10 @@ async def send_temp(channel, message, seconds=10):
 # -------- ÉVÉNEMENT : Réaction ajoutée --------
 @bot.event
 async def on_raw_reaction_add(payload):
+@bot.event
+async def on_raw_reaction_add(payload):
+    print(f"📩 Réaction détectée : {payload.emoji} sur message {payload.message_id} par user {payload.user_id}")
+
     if payload.guild_id != GUILD_ID:
         return
     if payload.user_id == bot.user.id:
