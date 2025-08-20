@@ -1,127 +1,299 @@
+import os
+import sys
+import asyncio
+from datetime import datetime, timedelta
+
 import discord
-from discord.ext import commands
-import json
-from datetime import date
+from discord.ext import commands, tasks
+from discord.errors import Forbidden
+from pymongo import MongoClient
+
+# ======================
+#   ENV & INTENTS
+# ======================
+TOKEN = os.getenv("DISCORD_TOKEN")
+MONGO_URI = os.getenv("MONGO_URI")
+GUILD_ID_STR = os.getenv("GUILD_ID", "").strip()
+GUILD_ID = int(GUILD_ID_STR) if GUILD_ID_STR.isdigit() else 0  # 0 = pas de filtre
+
+if not TOKEN:
+    print("❌ DISCORD_TOKEN manquant en variable d'environnement.")
+    sys.exit(1)
+if not MONGO_URI:
+    print("❌ MONGO_URI manquant en variable d'environnement.")
+    sys.exit(1)
 
 intents = discord.Intents.default()
+intents.guilds = True
 intents.members = True
 intents.reactions = True
+intents.message_content = True
+intents.messages = True
+
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# --- CONFIGURATION ---
+# ======================
+#   MONGO
+# ======================
+try:
+    mongo = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+    mongo.admin.command("ping")
+    print("🟢 MongoDB OK")
+except Exception as e:
+    print("🔴 MongoDB KO:", e)
+    sys.exit(1)
 
-# IDs des messages des autels
-AUTEL_MESSAGES = {
-    "Orrak": 1353249202523865153,   # ID du message d’autel Orrak
-    "Vaek": 1353255384948801637,    # ID du message d’autel Vaek
-    "Nhyara": 1353255533544734751,  # ID du message d’autel Nhyara
-    "Zeroth": 1353255680462819450,  # ID du message d’autel Zeroth
-    "Aëldis": 1353257057679052910   # ID du message d’autel Aëldis
+db = mongo.lumharel_bot
+utilisateurs = db.utilisateurs
+
+# ======================
+#   PARAMÈTRES AUTELS
+# ======================
+# Définir 1 message Discord par divinité (même message pour prières & offrandes)
+DEITES = {
+    "Orrak": {
+        "message_id": 1353249202523865153,
+        "priere_emoji": "🌿",
+        "role": "Béni·e par la Terre",
+        "offrandes": ["🍃", "🌰", "🍄", "🍂"],
+    },
+    "Vaek": {
+        "message_id": 1353255384948801637,
+        "priere_emoji": "🔥",
+        "role": "Marqué·e par la Flamme",
+        "offrandes": ["🧨", "🔨", "🔧", "🧱"],
+    },
+    "Nhyara": {
+        "message_id": 1353255533544734751,
+        "priere_emoji": "🌪️",
+        "role": "Guidé·e par les Vents",
+        "offrandes": ["💨", "🎐", "🌬️", "💫"],
+    },
+    "Zeroth": {
+        "message_id": 1353255680462819450,
+        "priere_emoji": "🌑",
+        "role": "Voilé·e par les Ombres",
+        "offrandes": ["⚰️", "🕸️", "🖤", "🗝️"],
+    },
+    "Aëldis": {
+        "message_id": 1353257057679052910,
+        "priere_emoji": "❄️",
+        "role": "Porté·e par le Silence",
+        "offrandes": ["☃️", "🧊", "🌙", "☁️"],
+    },
 }
 
-# Prières (emoji → rôle donné)
-PRIERES = {
-    "🌿": "Béni·e par la Terre",   # Orrak
-    "🔥": "Marqué·e par la Flamme",  # Vaek
-    "🌪️": "Guidé·e par les Vents",  # Nhyara
-    "🌑": "Voilé·e par les Ombres",  # Zeroth
-    "❄️": "Porté·e par le Silence"   # Aëldis
-}
-
-# Offrandes (dieu → liste d’emojis acceptés)
-OFFRANDES = {
-    "Orrak": ["🍃", "🌰", "🍄", "🍂"],
-    "Vaek": ["🧨", "🔨", "🔧", "🧱"],
-    "Nhyara": ["💨", "🎐", "🌬️", "💫"],
-    "Zeroth": ["⚰️", "🕸️", "🖤", "🗝️"],
-    "Aëldis": ["☃️", "🧊", "🌙", "☁️"]
-}
-
-# Valeur fixe des Lumes par offrande
 LUMES_PAR_OFFRANDE = 5
+DUREE_BENEDICTION_H = 24  # pour le nettoyage du rôle, côté base
 
-# Fichier de sauvegarde
-DATA_FILE = "users_data.json"
+# ======================
+#   HELPERS
+# ======================
+def today_str() -> str:
+    return datetime.utcnow().strftime("%Y-%m-%d")
 
-# --- FONCTIONS SAUVEGARDE ---
-
-def load_data():
+async def send_temp(channel: discord.abc.Messageable | None, content: str, seconds: int = 10):
+    if not channel:
+        return
     try:
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return {}
+        m = await channel.send(content)
+        await asyncio.sleep(seconds)
+        try:
+            await m.delete()
+        except:
+            pass
+    except:
+        pass
 
-def save_data(data):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4)
+def find_deity_by_message(message_id: int):
+    for name, conf in DEITES.items():
+        if conf["message_id"] == message_id:
+            return name, conf
+    return None, None
 
-user_data = load_data()
-
-# --- EVENTS ---
-
+# ======================
+#   EVENTS
+# ======================
 @bot.event
 async def on_ready():
-    print(f"✨ Connecté en tant que {bot.user}")
+    print(f"✅ Oracle connecté en tant que {bot.user} | Filtre GUILD_ID = {GUILD_ID or 'aucun'}")
+    cleanup_roles.start()
 
 @bot.event
-async def on_raw_reaction_add(payload):
+async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
+    # Filtre de guilde si défini
+    if GUILD_ID and payload.guild_id != GUILD_ID:
+        return
+    # ignore le bot lui-même
     if payload.user_id == bot.user.id:
         return
 
     guild = bot.get_guild(payload.guild_id)
+    if not guild:
+        return
     member = guild.get_member(payload.user_id)
-    if not member:
+    if not member or member.bot:
         return
 
     emoji = str(payload.emoji)
-    today = str(date.today())
-    user_id = str(payload.user_id)
+    channel = bot.get_channel(payload.channel_id)
+    message_id = payload.message_id
 
-    if user_id not in user_data:
-        user_data[user_id] = {"lumes": 0}
+    # Debug
+    print(f"📩 Réaction: {emoji} | msg={message_id} | user={member.display_name}")
 
-    # --- PRIÈRES ---
-    if emoji in PRIERES and payload.message_id in AUTEL_MESSAGES.values():
-        if user_data[user_id].get("priere_date") == today:
-            await member.send("🌙 Tu as déjà reçu une bénédiction aujourd’hui.")
-            return
-
-        role_name = PRIERES[emoji]
-        role = discord.utils.get(guild.roles, name=role_name)
-        if role:
-            await member.add_roles(role)
-            user_data[user_id]["priere_date"] = today
-            save_data(user_data)
-            await member.send(f"✨ Tu as reçu la bénédiction **{role_name}** !")
+    # Identifier la divinité par le message
+    deity_name, deity = find_deity_by_message(message_id)
+    if not deity:
+        # Pas un message d'autel
         return
 
-    # --- OFFRANDES ---
-    for dieu, emojis in OFFRANDES.items():
-        if emoji in emojis and payload.message_id == AUTEL_MESSAGES[dieu]:
-            if user_data[user_id].get("offrande_date") == today:
-                await member.send("🌙 Tu as déjà fait une offrande aujourd’hui.")
-                return
+    # Document utilisateur
+    user_id = str(member.id)
+    user = utilisateurs.find_one({"_id": user_id})
+    if not user:
+        utilisateurs.insert_one({
+            "_id": user_id,
+            "pseudo": member.name,
+            "lumes": 0,
+            "derniere_benediction": "",
+            "roles_temporaires": {},   # { role_name: iso_timestamp }
+            "offrandes": {}           # { "Orrak": "YYYY-MM-DD", ... }
+        })
+        user = utilisateurs.find_one({"_id": user_id}) or {}
 
-            user_data[user_id]["lumes"] += LUMES_PAR_OFFRANDE
-            user_data[user_id]["offrande_date"] = today
-            save_data(user_data)
+    today = today_str()
 
-            await member.send(f"💎 Ton offrande a été acceptée par **{dieu}**. Tu reçois **+{LUMES_PAR_OFFRANDE} Lumes** !")
+    # ----- PRIÈRE (bénédiction: 1/jour global) -----
+    if emoji == deity["priere_emoji"]:
+        last_bless = user.get("derniere_benediction", "")
+        if last_bless == today:
+            # déjà béni·e aujourd'hui
+            try:
+                await member.send("⚠️ Tu as déjà reçu une bénédiction aujourd’hui. Reviens demain 🌙")
+            except Forbidden:
+                await send_temp(channel, f"⚠️ {member.mention}, tu as déjà reçu une bénédiction aujourd’hui.", 10)
             return
 
-# --- COMMANDES ---
+        role_name = deity["role"]
+        role = discord.utils.get(guild.roles, name=role_name)
+        if role is None:
+            try:
+                role = await guild.create_role(name=role_name, reason="Oracle: bénédiction")
+            except Forbidden:
+                print(f"❌ Impossible de créer le rôle {role_name} (permissions).")
+                return
 
-@bot.command()
-async def benediction(ctx):
+        try:
+            await member.add_roles(role, reason="Oracle: bénédiction du jour")
+        except Forbidden:
+            print(f"❌ Impossible d'ajouter le rôle {role_name} à {member.display_name}.")
+            return
+
+        utilisateurs.update_one(
+            {"_id": user_id},
+            {"$set": {
+                "derniere_benediction": today,
+                f"roles_temporaires.{role_name}": datetime.utcnow().isoformat(),
+                "pseudo": member.name
+            }},
+            upsert=True
+        )
+        await send_temp(channel, f"✨ {member.mention} reçoit la bénédiction **{role_name}**.", 30)
+        return
+
+    # ----- OFFRANDE (Lumes: 1/jour par divinité) -----
+    if emoji in deity["offrandes"]:
+        last_offrande = (user.get("offrandes") or {}).get(deity_name, "")
+        if last_offrande == today:
+            await send_temp(channel, f"⚠️ {member.mention}, tu as déjà fait une offrande à **{deity_name}** aujourd’hui.", 10)
+            return
+
+        utilisateurs.update_one(
+            {"_id": user_id},
+            {"$set": {
+                f"offrandes.{deity_name}": today,
+                "pseudo": member.name
+            }, "$inc": {
+                "lumes": LUMES_PAR_OFFRANDE
+            }},
+            upsert=True
+        )
+        await send_temp(
+            channel,
+            f"🏱 Offrande acceptée par **{deity_name}**. "
+            f"{member.mention} gagne **+{LUMES_PAR_OFFRANDE} Lumes**.",
+            30
+        )
+        return
+
+    # Sinon: emoji non géré pour cet autel → on ignore
+    print(f"ℹ️ Emoji {emoji} ignoré pour l'autel {deity_name}.")
+
+# ======================
+#   TÂCHE: nettoyage rôles (24h)
+# ======================
+@tasks.loop(hours=1)
+async def cleanup_roles():
+    try:
+        now = datetime.utcnow()
+        for guild in bot.guilds:
+            for member in guild.members:
+                if member.bot:
+                    continue
+                user_id = str(member.id)
+                user = utilisateurs.find_one({"_id": user_id}) or {}
+                roles_temp = user.get("roles_temporaires", {}) or {}
+                to_unset = []
+
+                for role_name, iso_ts in roles_temp.items():
+                    try:
+                        assigned = datetime.fromisoformat(iso_ts)
+                    except Exception:
+                        to_unset.append(role_name)
+                        continue
+                    if now - assigned >= timedelta(hours=DUREE_BENEDICTION_H):
+                        role = discord.utils.get(guild.roles, name=role_name)
+                        if role and role in member.roles:
+                            try:
+                                await member.remove_roles(role, reason="Oracle: bénédiction expirée")
+                            except Forbidden:
+                                pass
+                        to_unset.append(role_name)
+
+                if to_unset:
+                    utilisateurs.update_one(
+                        {"_id": user_id},
+                        {"$unset": {f"roles_temporaires.{r}": "" for r in to_unset}}
+                    )
+    except Exception as e:
+        print("⚠️ cleanup_roles error:", e)
+
+# ======================
+#   COMMANDES
+# ======================
+@bot.command(name="oracle_lumes")
+async def oracle_lumes(ctx: commands.Context):
     user_id = str(ctx.author.id)
-    today = str(date.today())
+    user = utilisateurs.find_one({"_id": user_id}) or {}
+    lumes = user.get("lumes", 0)
+    await ctx.send(f"💰 {ctx.author.mention}, tu possèdes **{lumes} Lumes**.")
 
-    # Vérifie si l’utilisateur a prié aujourd’hui
-    if user_data.get(user_id, {}).get("priere_date") == today:
-        role_name = user_data[user_id].get("priere_role", "Inconnue")
+@bot.command(name="benediction")
+async def benediction(ctx: commands.Context):
+    user_id = str(ctx.author.id)
+    user = utilisateurs.find_one({"_id": user_id}) or {}
+    today = today_str()
+    if user.get("derniere_benediction") == today:
+        # essaie d’inférer le rôle courant à partir des rôles_temporaires
+        roles_temp = user.get("roles_temporaires", {}) or {}
+        role_name = next(iter(roles_temp.keys()), "Bénédiction active")
         await ctx.send(f"✨ {ctx.author.mention}, ta bénédiction du jour est **{role_name}**.")
     else:
-        await ctx.send(f"🌙 {ctx.author.mention}, tu n’as pas encore prié aujourd’hui.")
+        await ctx.send(f"🌙 {ctx.author.mention}, tu n’as pas encore reçu de bénédiction aujourd’hui.")
 
-bot.run("TON_TOKEN_ICI")
+# ======================
+#   START
+# ======================
+if __name__ == "__main__":
+    bot.run(TOKEN)
