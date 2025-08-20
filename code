@@ -261,4 +261,7 @@ async def oracle_debug(ctx: commands.Context):
 # ======================
 #   DÉMARRAGE
 # ======================
-if __name__ == "
+if __name__ == "__main__":
+    if not TOKEN or not MONGO_URI:
+        print("❌ Variables d'env manquantes : DISCORD_TOKEN et/ou MONGO_URI.")
+    bot.run(TOKEN)
