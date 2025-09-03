@@ -8,6 +8,9 @@ from discord.ext import commands, tasks
 from discord.errors import Forbidden
 from pymongo import MongoClient
 
+from aiohttp import web            # NEW
+from discord import app_commands   # NEW
+
 # ======================
 #   ENV & INTENTS
 # ======================
@@ -45,6 +48,13 @@ except Exception as e:
 
 db = mongo.lumharel_bot
 utilisateurs = db.utilisateurs
+liens = db.liens_twitch_discord  # NEW
+# indexes utiles (créés à chaud; si déjà faits, Mongo ignore)
+try:
+    liens.create_index([("_id", 1)], unique=True)
+    liens.create_index([("discord_id", 1)], unique=False)
+except Exception as e:
+    print("ℹ️ Index liens_twitch_discord:", e)
 
 # ======================
 #   PARAMÈTRES AUTELS
@@ -112,11 +122,102 @@ def find_deity_by_message(message_id: int):
     return None, None
 
 # ======================
+#   SLASH COMMANDS: link/unlink Twitch
+# ======================
+@bot.tree.command(name="linktwitch", description="Lier ton pseudo Twitch à ton Discord")
+@app_commands.describe(pseudo="Ton pseudo Twitch (exact)")
+async def linktwitch(interaction: discord.Interaction, pseudo: str):
+    """Associe twitch_login_lower -> discord_id (ephemeral feedback)."""
+    twitch_login = (pseudo or "").strip().lower()
+    if not twitch_login:
+        return await interaction.response.send_message("⚠️ Donne ton pseudo Twitch : /linktwitch <pseudo>", ephemeral=True)
+
+    now = datetime.utcnow()
+    try:
+        liens.update_one(
+            {"_id": twitch_login},
+            {"$set": {
+                "_id": twitch_login,
+                "discord_id": str(interaction.user.id),
+                "updated_at": now
+            }, "$setOnInsert": {
+                "created_at": now
+            }},
+            upsert=True
+        )
+        await interaction.response.send_message(
+            f"🔗 Lien enregistré : **{twitch_login}** ↔ <@{interaction.user.id}>",
+            ephemeral=True
+        )
+    except Exception as e:
+        print("linktwitch error:", e)
+        await interaction.response.send_message("❌ Erreur lors de l'enregistrement. Réessaie plus tard.", ephemeral=True)
+
+@bot.tree.command(name="unlinktwitch", description="Délier ton compte Twitch")
+async def unlinktwitch(interaction: discord.Interaction):
+    try:
+        res = liens.delete_one({"discord_id": str(interaction.user.id)})
+        if res.deleted_count:
+            await interaction.response.send_message("🗝️ Lien supprimé.", ephemeral=True)
+        else:
+            await interaction.response.send_message("ℹ️ Aucun lien trouvé.", ephemeral=True)
+    except Exception as e:
+        print("unlinktwitch error:", e)
+        await interaction.response.send_message("❌ Erreur. Réessaie plus tard.", ephemeral=True)
+
+# ======================
+#   HTTP API (lookup Twitch -> Discord ID)
+# ======================
+LOOKUP_TOKEN = os.getenv("LOOKUP_TOKEN", "").strip()
+
+async def handle_lookup(request):
+    # Auth simple par header
+    token = request.headers.get("X-Auth-Token")
+    if not LOOKUP_TOKEN or token != LOOKUP_TOKEN:
+        return web.json_response({"error": "unauthorized"}, status=401)
+
+    twitch = (request.query.get("twitch") or "").strip().lower()
+    if not twitch:
+        return web.json_response({"error": "missing twitch"}, status=400)
+
+    doc = liens.find_one({"_id": twitch})
+    if not doc:
+        return web.json_response({"found": False, "twitch_login": twitch})
+
+    return web.json_response({"found": True, "twitch_login": twitch, "discord_id": doc.get("discord_id")})
+
+async def start_api():
+    try:
+        app = web.Application()
+        app.router.add_get("/map/lookup", handle_lookup)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        port = int(os.getenv("PORT", "3000"))
+        site = web.TCPSite(runner, "0.0.0.0", port)
+        await site.start()
+        print(f"🔗 API Lookup démarrée sur :{port} (/map/lookup)")
+    except Exception as e:
+        print("❌ HTTP API error:", e)
+
+# ======================
 #   EVENTS
 # ======================
 @bot.event
 async def on_ready():
     print(f"✅ Oracle connecté en tant que {bot.user} | Filtre GUILD_ID = {GUILD_ID or 'aucun'}")
+    # Sync des slash commands
+    try:
+        await bot.tree.sync()
+        print("🟢 Slash commands synchronisées")
+    except Exception as e:
+        print("⚠️ Slash sync error:", e)
+
+    # Démarrage de l'API lookup (aiohttp)
+    try:
+        bot.loop.create_task(start_api())
+    except Exception as e:
+        print("⚠️ start_api error:", e)
+
     cleanup_roles.start()
 
 @bot.event
