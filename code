@@ -124,6 +124,9 @@ def find_deity_by_message(message_id: int):
 # ======================
 #   SLASH COMMANDS: link/unlink Twitch
 # ======================
+@bot.tree.command(name="ping", description="Test")
+async def ping_cmd(interaction: discord.Interaction):
+    await interaction.response.send_message("pong", ephemeral=True)
 @bot.tree.command(name="linktwitch", description="Lier ton pseudo Twitch à ton Discord")
 @app_commands.describe(pseudo="Ton pseudo Twitch (exact)")
 async def linktwitch(interaction: discord.Interaction, pseudo: str):
@@ -202,23 +205,41 @@ async def start_api():
 # ======================
 #   EVENTS
 # ======================
+from discord import app_commands
+
+# ... (tes definitions / imports / commandes @bot.tree.command ci-dessus)
+
 @bot.event
 async def on_ready():
     print(f"✅ Oracle connecté en tant que {bot.user} | Filtre GUILD_ID = {GUILD_ID or 'aucun'}")
-    # Sync des slash commands
+
+    # 1) DEBUG : lister les commandes enregistrées dans le tree
+    cmds = bot.tree.get_commands()
+    print(f"🧭 {len(cmds)} commandes app présentes dans le tree: {[c.name for c in cmds]}")
+
+    # 2) SYNC ciblée par guilde(s) pour apparition instantanée
     try:
-        await bot.tree.sync()
-        print("🟢 Slash commands synchronisées")
+        if GUILD_ID:
+            guild_obj = discord.Object(id=GUILD_ID)
+            # (optionnel) si tu avais déjà des globales, tu peux les copier dans la guilde
+            # bot.tree.copy_global_to_guild(guild=guild_obj)
+            synced = await bot.tree.sync(guild=guild_obj)
+            print(f"🟢 Slash sync GUILD {GUILD_ID} → {len(synced)} cmds")
+        else:
+            synced = await bot.tree.sync()  # global (plus lent à apparaître)
+            print(f"🟢 Slash sync GLOBAL → {len(synced)} cmds")
     except Exception as e:
         print("⚠️ Slash sync error:", e)
 
-    # Démarrage de l'API lookup (aiohttp)
+    # 3) Démarre l’API lookup si besoin
     try:
         bot.loop.create_task(start_api())
     except Exception as e:
         print("⚠️ start_api error:", e)
 
+    # 4) Tes tâches existantes
     cleanup_roles.start()
+
 
 @bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
