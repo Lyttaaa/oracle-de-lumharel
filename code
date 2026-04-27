@@ -335,37 +335,37 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
         await send_temp(channel, f"✨ {member.mention} reçoit la bénédiction **{role_name}** (Autel de {deity_name}).", 30)
         return
 
-    # ----- OFFRANDE (Lumes: 1/jour global) -----
-if emoji in deity["offrandes"]:
-    last_offrande = user.get("derniere_offrande", "")
+    # ----- OFFRANDE (Lumes: 1/jour global, tous autels confondus) -----
+    if emoji in deity["offrandes"]:
+        last_offrande = user.get("derniere_offrande", "")
+        if last_offrande == today:
+            autel_precis = user.get("dernier_autel_offrande", "un autel")
+            await send_temp(
+                channel,
+                f"⚠️ {member.mention}, tu as déjà fait une offrande aujourd’hui "
+                f"à **{autel_precis}**. Une seule offrande est possible par jour.",
+                10
+            )
+            return
 
-    if last_offrande == today:
+        utilisateurs.update_one(
+            {"_id": user_id},
+            {"$set": {
+                "derniere_offrande": today,
+                "dernier_autel_offrande": deity_name,
+                "pseudo": member.name
+            }, "$inc": {
+                "lumes": LUMES_PAR_OFFRANDE
+            }},
+            upsert=True
+        )
         await send_temp(
             channel,
-            f"⚠️ {member.mention}, tu as déjà fait une offrande aujourd’hui.",
-            10
+            f"🏱 Offrande acceptée par **{deity_name}**. "
+            f"{member.mention} gagne **+{LUMES_PAR_OFFRANDE} Lumes**.",
+            30
         )
         return
-
-    utilisateurs.update_one(
-        {"_id": user_id},
-        {"$set": {
-            "derniere_offrande": today,
-            "dernier_autel_offrande": deity_name,
-            "pseudo": member.name
-        }, "$inc": {
-            "lumes": LUMES_PAR_OFFRANDE
-        }},
-        upsert=True
-    )
-
-    await send_temp(
-        channel,
-        f"🏱 Offrande acceptée par **{deity_name}**. "
-        f"{member.mention} gagne **+{LUMES_PAR_OFFRANDE} Lumes**.",
-        30
-    )
-    return
 
     # Sinon: emoji non géré pour cet autel → on ignore
     print(f"ℹ️ Emoji {emoji} ignoré pour l'autel {deity_name}.")
@@ -410,11 +410,11 @@ async def cleanup_roles():
         print("⚠️ cleanup_roles error:", e)
 
 # ======================
-#   COMMANDE BÉNÉDICTION
+#   COMMANDE SLASH BÉNÉDICTION
 # ======================
-@bot.command(name="benediction")
-async def benediction(ctx: commands.Context):
-    user_id = str(ctx.author.id)
+@bot.tree.command(name="benediction", description="Voir ta bénédiction du jour")
+async def benediction(interaction: discord.Interaction):
+    user_id = str(interaction.user.id)
     user = utilisateurs.find_one({"_id": user_id}) or {}
     today = today_str()
 
@@ -422,12 +422,19 @@ async def benediction(ctx: commands.Context):
         roles_temp = user.get("roles_temporaires", {}) or {}
         role_name = next(iter(roles_temp.keys()), "Bénédiction active")
         autel_precis = user.get("dernier_autel", None)
+
         if autel_precis and role_name != "Bénédiction active":
-            await ctx.send(f"✨ {ctx.author.mention}, ta bénédiction du jour est **{role_name}** (Autel de {autel_precis}).")
+            await interaction.response.send_message(
+                f"✨ {interaction.user.mention}, ta bénédiction du jour est **{role_name}** (Autel de {autel_precis})."
+            )
         else:
-            await ctx.send(f"✨ {ctx.author.mention}, ta bénédiction du jour est **{role_name}**.")
+            await interaction.response.send_message(
+                f"✨ {interaction.user.mention}, ta bénédiction du jour est **{role_name}**."
+            )
     else:
-        await ctx.send(f"🌙 {ctx.author.mention}, tu n’as pas encore reçu de bénédiction aujourd’hui.")
+        await interaction.response.send_message(
+            f"🌙 {interaction.user.mention}, tu n’as pas encore reçu de bénédiction aujourd’hui."
+        )
 
 # ======================
 #   START
